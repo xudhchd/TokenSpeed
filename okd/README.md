@@ -144,7 +144,9 @@ oc set env     deploy/tokenspeed -n ai NODE_EXTRA_CA_CERTS=/etc/route-ca/ca-bund
 
 **3. 关掉校验（不推荐）**
 
-`oc set env deploy/tokenspeed -n ai NODE_TLS_REJECT_UNAUTHORIZED=0`。它会让这个服务对**所有** https 上游都不校验证书，包括你填了 Key 的公网 API，等于放弃了中间人防护，只适合临时排查。
+`oc set env deploy/tokenspeed -n ai NODE_TLS_REJECT_UNAUTHORIZED=0`。一行就能让这个报错消失，适合临时确认「失败原因确实是证书」。它会让这个服务对**所有** https 上游都不校验证书，包括你填了 Key 的公网 API，等于放弃了中间人防护，只适合临时排查——确认完就应改回方案 2。
+
+生效后页面顶部会出现一条黄色提示（来自 `/api/info` 的 `tls.insecure`），说明当前成绩是在不校验证书的链路上测出来的。项目没把它做成界面开关：它是进程级设置，做不到只对单次请求生效；多用户共享时也不该把「关闭全站 TLS 校验」交给匿名访问者。
 
 ### 只是偶尔测一下：不用动线上部署
 

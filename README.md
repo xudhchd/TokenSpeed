@@ -78,11 +78,52 @@ docker compose up -d --build
 | `HOST` | 监听地址，镜像内已设为 `0.0.0.0`，一般不用改 |
 | `BLOCK_PRIVATE=1` | 拒绝把测速请求转发到内网或本机地址（含解析到内网的域名）。公网部署务必打开 |
 | `SELF_IPS` | 逗号分隔的 IP，通常填云服务器的公网 IP（它不在网卡上，需要补进来才会被同样拒绝） |
+| `NODE_EXTRA_CA_CERTS` | 指向一个 CA 证书文件，**追加**进 Node 信任库。访问自签名证书的内网 https 服务时用它 |
+| `NODE_TLS_REJECT_UNAUTHORIZED=0` | **仅临时排查**：关闭所有 https 上游的证书校验。说明见[证书校验](#证书校验自签名证书报错) |
 | `DEMO_PREFILL_TPS` / `DEMO_DECODE_TPS` / `DEMO_CHUNK` / `DEMO_MTP` / `DEMO_NO_CONT` | 内置演示服务的模拟参数，用法见 `lib/mock.js` |
 
 镜像默认把端口发布到 `127.0.0.1`，适合前面挂一层 nginx 之类的反向代理做访问控制和限流；如果确实要直接对外，把 compose 里的 `ports` 改成 `"5173:5173"`，并同时打开 `BLOCK_PRIVATE=1`、配置 `SELF_IPS` 与出站网络策略，避免这个服务被当成访问内网的跳板。服务端无状态，配置和 Key 都存在浏览器里，因此不需要挂载卷做持久化。
 
 在 OKD / OpenShift 上用 `okd/tokenspeed.yaml`（ImageStream + BuildConfig + Deployment + Service + Route，已按 restricted-v2 安全上下文写好），步骤见 [okd/README.md](okd/README.md)。
+
+## 证书校验（自签名证书报错）
+
+当接口地址写成 `https://`，而对方用的是自签名证书（内网网关、OpenShift / OKD 的 Route 默认证书等），测速会在建连阶段就失败，页面上看到的报错是：
+
+- `连接测试失败 · 网络错误：self-signed certificate`
+- `unable to verify the first certificate`
+- `self signed certificate in certificate chain`
+- `连接测试失败 · 网络错误：fetch failed`（底层错误码 `DEPTH_ZERO_SELF_SIGNED_CERT`、`SELF_SIGNED_CERT_IN_CHAIN`、`UNABLE_TO_VERIFY_LEAF_SIGNATURE`）
+
+原因跟测速逻辑无关：Node 的信任库（内置根证书 + 系统 CA）里没有签发这张证书的 CA。同一个地址在浏览器里能打开，是因为浏览器让你手动确认「继续访问」，而 Node 默认直接拒绝，没有交互余地。改成 `http://` 就正常，是因为这一步根本不做 TLS。
+
+### 推荐：把对方的 CA 追加进信任库
+
+```bash
+NODE_EXTRA_CA_CERTS=/path/to/ca.crt npm start
+```
+
+`NODE_EXTRA_CA_CERTS` 的语义是**追加**，公网 CA 仍然照常校验，所以填了 Key 的 DeepSeek、OpenAI 这类请求不会受影响。Docker 里用 `-v /path/ca.crt:/etc/ca.crt:ro -e NODE_EXTRA_CA_CERTS=/etc/ca.crt`；OKD 上取集群路由证书的命令见 [okd/README.md](okd/README.md)。
+
+### 临时：关掉证书校验
+
+```bash
+NODE_TLS_REJECT_UNAUTHORIZED=0 npm start
+```
+
+这是 Node 自己的环境变量（不是本项目实现的），一行就能让上面所有报错消失，用它来快速确认「失败原因确实是证书」很方便。部分报错（比如内网服务返回的内容被当成错误消息）也能靠它区分开。
+
+代价要说清楚：**进程内所有 https 请求都不再校验证书**，包括你填了 Key 的公网 API。链路上任何一跳都能冒充目标服务，Key 和对话内容都可能被截走。所以它只适合内部排查，确认原因后应改回 `NODE_EXTRA_CA_CERTS`。
+
+打开这个开关时，页面顶部会显示一条黄色提示，说明当前成绩是在不校验证书的链路上测出来的。项目**没有**把它做成界面上的开关，原因有三个：
+
+1. 它是进程级设置，无法只对某一次请求生效。要按请求生效，得给这个零依赖项目引入 `undici`（Node 内置的 `fetch` 不导出 `Agent`），或者把整个请求层改成 `node:https` 重写；
+2. 运行时临时改 `process.env` 会有竞态：Node 是在建立连接那一刻读取它的，32 路并发下必然出现一部分连接校验、一部分不校验；
+3. 公网部署时页面没有鉴权，做了按钮等于把「关闭全站 TLS 校验」的决定权交给任何访问者。
+
+### 最省事的办法
+
+如果模型服务和 TokenSpeed 跑在同一台机器或同一个集群里，直接用内网 http 地址（例如 `http://vllm.ai.svc.cluster.local:8000/v1`），完全不涉及证书，还少一跳转发、不受路由空闲超时影响。
 
 ## 部署到公网
 
