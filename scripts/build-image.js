@@ -8,11 +8,12 @@
 //   node scripts/build-image.js --dry-run     # 只打印将要执行的命令，不真的构建
 //   node scripts/build-image.js --platform linux/amd64   # 交叉构建
 //
-// 版本号规则（Docker tag 只允许字母数字、. _ -，下面每一档都合法）：
-//   HEAD 正好在 tag v1.1.0 且无改动      -> 1.1.0           同时打 latest
-//   tag 之后又有 3 个提交                -> 1.1.0-3-g6ac568a 不打 latest
-//   有未提交的已跟踪改动（脏工作区）      -> 1.1.0-dirty     不打 latest
-//   一个 tag 都没有                      -> 0.0.0-<短提交号>
+// 版本号规则（Docker tag 只允许字母数字、. _ -，下面每一档都合法；一律带 v 前缀，
+// 和 git tag、package.json 的写法保持一致，看到就知道是哪一版）：
+//   HEAD 正好在 tag v1.1.0 且无改动      -> v1.1.0           同时打 latest
+//   tag 之后又有 3 个提交                -> v1.1.0-3-g6ac568a 不打 latest
+//   有未提交的已跟踪改动（脏工作区）      -> v1.1.0-dirty     不打 latest
+//   一个 tag 都没有                      -> v0.0.0-<短提交号>
 //
 // latest 只给"发布版"打：否则 latest 会指向某个中间态，和 README 里
 // 「固定版本用于部署、latest 仅本地随手跑」的约定就对不上了。要强行打用 --latest。
@@ -42,13 +43,13 @@ if (anyTag && !exactTag) {
 let version;
 let release = false; // 是否算发布版（决定要不要打 latest）
 if (exactTag) {
-  version = exactTag.replace(/^v/, '');
+  version = exactTag; // 已经带 v，和 git tag 完全一致，方便对着 tag 找镜像
   release = !dirty;
 } else if (longTag) {
-  // v1.1.0-3-g6ac568a -> 1.1.0-3-g6ac568a
-  version = longTag.replace(/^v/, '');
+  // v1.1.0-3-g6ac568a 原样使用
+  version = longTag;
 } else {
-  version = `0.0.0-${revision}`;
+  version = `v0.0.0-${revision}`;
 }
 if (dirty) version += '-dirty';
 

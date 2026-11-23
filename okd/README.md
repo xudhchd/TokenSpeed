@@ -16,7 +16,7 @@
 
 | 资源 | 作用 |
 | --- | --- |
-| `ImageStream` `tokenspeed` | 存放构建出来的镜像，标签用具体版本号（当前 `:1.1.1`），不使用 `latest` |
+| `ImageStream` `tokenspeed` | 存放构建出来的镜像，标签用具体版本号（当前 `:v1.1.2`），不使用 `latest` |
 | `BuildConfig` `tokenspeed` | Docker 策略 + 二进制源，直接拿本地仓库目录构建，不用外部镜像仓库 |
 | `Deployment` `tokenspeed` | 1 副本，restricted-v2 兼容的安全上下文，带 `/api/info` 就绪与存活探针 |
 | `Service` `tokenspeed` | 5173 端口 |
@@ -52,46 +52,46 @@ oc rollout restart deploy/tokenspeed
 清单里的镜像标签是**具体版本号**（BuildConfig 输出 + Deployment 镜像两处，都在 `okd/tokenspeed.yaml` 里，`okd/deployment.yaml` 单文件版还有一处），换版本时：
 
 ```bash
-VER=1.2.0
+VER=v1.2.0          # 带 v 前缀，与 git tag、package.json 一致
 # 1) 镜像标签：BuildConfig 输出 + Deployment 镜像（deployment.yaml 单文件版还有一处）
-sed -i -E "s|tokenspeed:[0-9]+\.[0-9]+\.[0-9]+|tokenspeed:$VER|g" okd/tokenspeed.yaml okd/deployment.yaml
+sed -i -E "s|tokenspeed:v?[0-9]+\.[0-9]+\.[0-9]+|tokenspeed:$VER|g" okd/tokenspeed.yaml okd/deployment.yaml
 # 2) BuildConfig 传给构建的 VERSION，会写进镜像的 org.opencontainers.image.version
-sed -i -E "s|value: \"[0-9]+\.[0-9]+\.[0-9]+\"|value: \"$VER\"|" okd/tokenspeed.yaml
+sed -i -E "s|value: \"v?[0-9]+\.[0-9]+\.[0-9]+\"|value: \"$VER\"|" okd/tokenspeed.yaml
 oc apply -f okd/tokenspeed.yaml
 oc start-build tokenspeed --from-dir=. --follow
 ```
 
 ⚠️ 改完标签**必须**重新构建一次，否则 Deployment 要找的 `tokenspeed:$VER` 在 ImageStream 里不存在，Pod 会卡在 `ImagePullBackOff`。
 
-不改标签也能构建 —— 会覆盖 `1.1.1` 这个 tag，代价是「同一个版本号对应两个不同的镜像内容」，回滚时说不清回到哪个，所以建议每次都换。
+不改标签也能构建 —— 会覆盖 `v1.1.2` 这个 tag，代价是「同一个版本号对应两个不同的镜像内容」，回滚时说不清回到哪个，所以建议每次都换。
 
 回滚就是把 Deployment 的镜像改回上一个标签：
 
 ```bash
-oc set image deploy/tokenspeed tokenspeed=image-registry.openshift-image-registry.svc:5000/<项目名>/tokenspeed:1.0.0
+oc set image deploy/tokenspeed tokenspeed=image-registry.openshift-image-registry.svc:5000/<项目名>/tokenspeed:v1.0.0
 ```
 
 ## 项目名不是 tokenspeed
 
-清单里的镜像地址写死了内置仓库的集群内地址 `.../tokenspeed/tokenspeed:1.1.1`（中间那段是 namespace）。换了项目名后修正一行即可：
+清单里的镜像地址写死了内置仓库的集群内地址 `.../tokenspeed/tokenspeed:v1.1.2`（中间那段是 namespace）。换了项目名后修正一行即可：
 
 ```bash
-oc set image deployment/tokenspeed tokenspeed="$(oc get istag tokenspeed:1.1.1 -o jsonpath='{.image.dockerImageReference}')"
+oc set image deployment/tokenspeed tokenspeed="$(oc get istag tokenspeed:v1.1.2 -o jsonpath='{.image.dockerImageReference}')"
 ```
 
 ## 已经有镜像，不想在集群里构建（走外部/内部镜像仓库）
 
 ```bash
 # 外部仓库（集群能拉到即可）
-docker tag tokenspeed:1.1.1 quay.io/<你>/tokenspeed:1.1.1
-docker push quay.io/<你>/tokenspeed:1.1.1
-oc set image deployment/tokenspeed tokenspeed=quay.io/<你>/tokenspeed:1.1.1
+docker tag tokenspeed:v1.1.2 quay.io/<你>/tokenspeed:v1.1.2
+docker push quay.io/<你>/tokenspeed:v1.1.2
+oc set image deployment/tokenspeed tokenspeed=quay.io/<你>/tokenspeed:v1.1.2
 
 # 或者推到 OKD 内置仓库
 oc registry login
 REG=$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')
-docker tag tokenspeed:1.1.1 "$REG/$(oc project -q)/tokenspeed:1.1.1"
-docker push "$REG/$(oc project -q)/tokenspeed:1.1.1"
+docker tag tokenspeed:v1.1.2 "$REG/$(oc project -q)/tokenspeed:v1.1.2"
+docker push "$REG/$(oc project -q)/tokenspeed:v1.1.2"
 ```
 
 `oc apply` 时可以把 `okd/tokenspeed.yaml` 里的 `BuildConfig` 段删掉，只留 ImageStream/Deployment/Service/Route。

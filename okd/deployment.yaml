@@ -32,7 +32,7 @@ spec:
           # 镜像在 OKD 内置仓库的 ai 项目下；若在别处（quay.io / 私有仓库），改这一行
           # 或：oc set image deployment/tokenspeed tokenspeed=<真实镜像地址> -n ai
           # 标签用具体版本号，回滚时改回上一个版本即可
-          image: image-registry.openshift-image-registry.svc:5000/ai/tokenspeed:1.1.1
+          image: image-registry.openshift-image-registry.svc:5000/ai/tokenspeed:v1.1.2
           imagePullPolicy: Always
           ports:
             - name: http

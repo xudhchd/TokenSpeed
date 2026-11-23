@@ -62,7 +62,7 @@ okd/               OKD / OpenShift 部署清单（ImageStream + BuildConfig + De
 
 ```bash
 npm run image    # 版本号取自 git tag，规则见「版本与发版」
-docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed:1.1.0
+docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed:v1.1.2
 ```
 
 或用 compose 一把起：
@@ -89,19 +89,21 @@ docker compose up -d --build
 
 ## 版本与发版
 
-本仓库是 [1CatAI/TokenSpeed](https://github.com/1CatAI/TokenSpeed) 的分叉。`1.0.0` 与上游完全一致，**从 `1.1.0` 起独立演进**：版本号只描述本仓库的发布内容，不保证与上游的编号一一对应，判断是否跟上了上游要看提交历史和 tag，而不是比数字大小。
+本仓库是 [1CatAI/TokenSpeed](https://github.com/1CatAI/TokenSpeed) 的分叉。上游的 `v1.0.0` 与本仓库起始提交一致，**从 `v1.1.0` 起独立演进**：版本号只描述本仓库的发布内容，不保证与上游的编号一一对应，判断是否跟上了上游要看提交历史和 tag，而不是比数字大小。
+
+版本号**一律带 `v` 前缀**，git tag、`package.json` 的 `version`、镜像标签三处写法完全相同（例如 `v1.1.2`），互相能直接对上。Docker tag 允许字母开头，所以带 `v` 不影响使用。
 
 镜像标签约定两套，用途不同：
 
 | 标签形式 | 用途 |
 | --- | --- |
-| `tokenspeed:1.1.0` | 固定版本，**部署清单里一律用它**。回滚、排查时能确认跑的是哪一版 |
+| `tokenspeed:v1.1.2` | 固定版本，**部署清单里一律用它**。回滚、排查时能确认跑的是哪一版 |
 | `tokenspeed:latest` | 移动别名，只指向最近一次本地构建，图省事在命令行随手 `docker run` 用 |
 
 镜像的 `org.opencontainers.image.version` / `.revision` 标签由 Dockerfile 的 `ARG VERSION` / `ARG REVISION` 写入，`docker inspect` 可查：
 
 ```bash
-docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' tokenspeed:1.1.0
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' tokenspeed:v1.1.2
 ```
 
 ### 按 tag 构建镜像
@@ -119,10 +121,10 @@ npm run image -- --platform linux/amd64   # 交叉构建（比如在 Mac 上出 
 
 | 仓库状态 | 镜像标签 | 是否打 `latest` |
 | --- | --- | --- |
-| HEAD 正好在 tag `v1.1.0` 上，且没有未提交改动 | `tokenspeed:1.1.0` | 是 |
-| tag 之后又有 3 个提交 | `tokenspeed:1.1.0-3-g6ac568a` | 否 |
-| 有未提交的改动（只算已跟踪文件） | `tokenspeed:1.1.0-dirty` | 否 |
-| 一个 tag 都没有 | `tokenspeed:0.0.0-<短提交号>` | 否 |
+| HEAD 正好在 tag `v1.1.0` 上，且没有未提交改动 | `tokenspeed:v1.1.0` | 是 |
+| tag 之后又有 3 个提交 | `tokenspeed:v1.1.0-3-g6ac568a` | 否 |
+| 有未提交的改动（只算已跟踪文件） | `tokenspeed:v1.1.0-dirty` | 否 |
+| 一个 tag 都没有 | `tokenspeed:v0.0.0-<短提交号>` | 否 |
 
 `latest` 只给发布版打，否则它会指向某个中间状态，和上面「固定版本用于部署」的约定就冲突了。要强行打用 `--latest`。
 
@@ -131,7 +133,7 @@ npm run image -- --platform linux/amd64   # 交叉构建（比如在 Mac 上出 
 不想用脚本时，手动等价写法：
 
 ```bash
-VER=$(git describe --tags --exact-match 2>/dev/null | sed 's/^v//')   # 只在 tag 上有效
+VER=$(git describe --tags --exact-match 2>/dev/null)   # 只在 tag 上有效，已带 v 前缀
 docker build -t tokenspeed:$VER -t tokenspeed:latest \
   --build-arg VERSION=$VER --build-arg REVISION=$(git rev-parse --short HEAD) .
 ```
