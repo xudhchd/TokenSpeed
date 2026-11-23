@@ -60,8 +60,8 @@ okd/               OKD / OpenShift 部署清单（ImageStream + BuildConfig + De
 项目零第三方依赖，镜像里不需要 `npm install`，构建只做文件拷贝（Node 22 alpine 基础镜像约 240 MB）。
 
 ```bash
-docker build -t tokenspeed .
-docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed
+docker build -t tokenspeed:1.1.0 -t tokenspeed:latest .
+docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed:1.1.0
 ```
 
 或用 compose 一把起：
@@ -85,6 +85,39 @@ docker compose up -d --build
 镜像默认把端口发布到 `127.0.0.1`，适合前面挂一层 nginx 之类的反向代理做访问控制和限流；如果确实要直接对外，把 compose 里的 `ports` 改成 `"5173:5173"`，并同时打开 `BLOCK_PRIVATE=1`、配置 `SELF_IPS` 与出站网络策略，避免这个服务被当成访问内网的跳板。服务端无状态，配置和 Key 都存在浏览器里，因此不需要挂载卷做持久化。
 
 在 OKD / OpenShift 上用 `okd/tokenspeed.yaml`（ImageStream + BuildConfig + Deployment + Service + Route，已按 restricted-v2 安全上下文写好），步骤见 [okd/README.md](okd/README.md)。
+
+## 版本与发版
+
+本仓库是 [1CatAI/TokenSpeed](https://github.com/1CatAI/TokenSpeed) 的分叉。`1.0.0` 与上游完全一致，**从 `1.1.0` 起独立演进**：版本号只描述本仓库的发布内容，不保证与上游的编号一一对应，判断是否跟上了上游要看提交历史和 tag，而不是比数字大小。
+
+镜像标签约定两套，用途不同：
+
+| 标签形式 | 用途 |
+| --- | --- |
+| `tokenspeed:1.1.0` | 固定版本，**部署清单里一律用它**。回滚、排查时能确认跑的是哪一版 |
+| `tokenspeed:latest` | 移动别名，只指向最近一次本地构建，图省事在命令行随手 `docker run` 用 |
+
+镜像的 `org.opencontainers.image.version` / `.revision` 标签由 Dockerfile 的 `ARG VERSION` / `ARG REVISION` 写入，`docker inspect` 可查：
+
+```bash
+docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' tokenspeed:1.1.0
+```
+
+发版要同步改四处，缺一处就会出现「tag 是 1.2.0、镜像还是 1.1.0」这类不一致：
+
+1. `package.json` 的 `version`
+2. `Dockerfile` 里 `ARG VERSION=...` 的默认值
+3. `docker-compose.yml` 里 `${TOKENSPEED_VERSION:-...}` 的默认值
+4. `okd/tokenspeed.yaml` 的 BuildConfig 输出标签与 Deployment 镜像地址、`okd/deployment.yaml` 的镜像地址
+
+然后打 tag 并推送：
+
+```bash
+git tag -a v1.2.0 -m "v1.2.0"
+git push origin v1.2.0
+```
+
+`git describe --tags` 可以看当前提交相对哪个版本；镜像构建时想带上提交号，用 `--build-arg REVISION=$(git rev-parse --short HEAD)`（compose 对应 `TOKENSPEED_REVISION=$(git rev-parse --short HEAD) docker compose build`）。
 
 ## 证书校验（自签名证书报错）
 
