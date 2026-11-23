@@ -35,6 +35,22 @@ async function withUpstream(handler, check) {
   }
 }
 
+async function withStatus(status, check) {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: status === 401 ? 'invalid token' : 'upstream error' } }));
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    await check(`http://127.0.0.1:${server.address().port}/v1`);
+  } finally {
+    server.close();
+    server.closeAllConnections?.();
+    await once(server, 'close');
+  }
+}
+
 function openAIChunk(send, count) {
   send({
     choices: [{ delta: { content: 'some text' } }],
@@ -137,12 +153,32 @@ test('missing and final-only usage produce different available metrics', async (
   });
 });
 
-test('empty and truncated streams cannot be reported as a latency sample', async () => {
+test('empty and truncated streams degrade to a first-chunk latency instead of aborting', async () => {
+  // 流完整但没有任何可见文本：放宽到 16 token 也拿不到，退化成"首个 SSE 数据块到达"
   await withUpstream((_, send) => openAIFinish(send, { prompt_tokens: 20, completion_tokens: 1 }), async (baseUrl) => {
-    await assert.rejects(run(baseUrl), /未收到文本或推理输出/);
+    const s = await run(baseUrl, { runPrefill: false, runSingle: false, runDecode: false });
+    assert.equal(s.ping.tokens, 16);
+    assert.equal(s.ping.approx, true);
+    assert.ok(Number.isFinite(s.ping.min));
   });
+  // 有内容但缺结束事件：首包时间已经拿到，按可用处理，不因此中止整轮
   await withUpstream((_, send) => openAIChunk(send, 1), async (baseUrl) => {
-    await assert.rejects(run(baseUrl), /缺少结束事件/);
+    const s = await run(baseUrl, { runPrefill: false, runSingle: false, runDecode: false });
+    assert.equal(s.ping.tokens, 1);
+    assert.ok(Number.isFinite(s.ping.min));
+  });
+});
+
+test('auth failures abort the run, transient upstream errors only degrade the latency', async () => {
+  // 401 换到哪个阶段都不会成功，直接中止
+  await withStatus(401, async (baseUrl) => {
+    await assert.rejects(run(baseUrl), /连接测试失败/);
+  });
+  // 500 只让延迟这一项不可用，后面的阶段照常尝试
+  await withStatus(500, async (baseUrl) => {
+    const s = await run(baseUrl, { runPrefill: false, runSingle: false, runDecode: false });
+    assert.equal(s.ping.unavailable, true);
+    assert.match(s.ping.reason, /HTTP 500/);
   });
 });
 
