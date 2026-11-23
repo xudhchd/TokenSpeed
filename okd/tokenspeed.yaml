@@ -34,13 +34,13 @@ spec:
       # 传成 --build-arg，写进镜像的 org.opencontainers.image.version
       env:
         - name: VERSION
-          value: "1.1.0"
+          value: "1.1.1"
   output:
     to:
       kind: ImageStreamTag
       # 打具体版本号而不是 latest：每次构建都会生成一个不可变的 tag，
       # 回滚时把 Deployment 的镜像改回上一个 tag 即可。发版时和下面的 image 一起改
-      name: tokenspeed:1.1.0
+      name: tokenspeed:1.1.1
   successfulBuildsHistoryLimit: 3
   failedBuildsHistoryLimit: 3
 ---
@@ -70,7 +70,7 @@ spec:
         - name: tokenspeed
           # OKD 内置镜像仓库的集群内地址；项目名不是 tokenspeed 时见 README
           # 标签与 BuildConfig 的输出保持一致，升级版本时两处一起改
-          image: image-registry.openshift-image-registry.svc:5000/tokenspeed/tokenspeed:1.1.0
+          image: image-registry.openshift-image-registry.svc:5000/tokenspeed/tokenspeed:1.1.1
           imagePullPolicy: Always
           ports:
             - name: http
