@@ -1,0 +1,20 @@
+services:
+  tokenspeed:
+    build: .
+    image: tokenspeed:latest
+    container_name: tokenspeed
+    restart: unless-stopped
+    # 默认只绑本机回环，由反向代理对外提供服务；
+    # 需要直接对外访问时改成 "5173:5173"（并务必阅读 README 的安全建议）
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 5173
+      # 公网部署强烈建议打开：拒绝把测速请求转发到内网/本机，避免被当成跳板
+      # BLOCK_PRIVATE: "1"
+      # BLOCK_PRIVATE=1 时，域名解析到这些公网 IP 也一并拒绝
+      # （云服务器的公网 IP 通常不在网卡上，需要显式声明）
+      # SELF_IPS: "203.0.113.10"
+    security_opt:
+      - no-new-privileges:true

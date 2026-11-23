@@ -1,0 +1,124 @@
+# TokenSpeed @ OKD · 一个文件建好 Deployment + Service + Route
+# oc apply -f okd/deployment.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tokenspeed
+  namespace: ai
+  labels:
+    app: tokenspeed
+spec:
+  # 固定 1 副本：/api/stop 依赖进程内的 run 表，多副本时停止请求会打到别的 Pod
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tokenspeed
+  template:
+    metadata:
+      labels:
+        app: tokenspeed
+    spec:
+      serviceAccountName: ai-sa
+      # 应用不调用 Kubernetes API，就不需要把 SA token 挂进 Pod；SA 另有他用时再放开
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: tokenspeed
+          # 镜像在 OKD 内置仓库的 ai 项目下；若在别处（quay.io / 私有仓库），改这一行
+          # 或：oc set image deployment/tokenspeed tokenspeed=<真实镜像地址> -n ai
+          image: image-registry.openshift-image-registry.svc:5000/ai/tokenspeed:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 5173
+              protocol: TCP
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "5173"
+            # 公网服务必须开：拒绝把测速请求转发到内网/本机地址。
+            # 要测集群内 / 内网模型时改成 "0"，并且必须同时应用 okd/networkpolicy.yaml
+            # 用网络层限制出站，否则等于把内网探测代理对外开放。步骤见 okd/README.md
+            - name: BLOCK_PRIVATE
+              value: "1"
+            # 云服务器公网 IP 通常不在网卡上，需要声明才会一并拒绝
+            # - name: SELF_IPS
+            #   value: "203.0.113.10"
+          readinessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tokenspeed
+  namespace: ai
+  labels:
+    app: tokenspeed
+spec:
+  selector:
+    app: tokenspeed
+  ports:
+    - name: http
+      port: 5173
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tokenspeed
+  namespace: ai
+  labels:
+    app: tokenspeed
+  annotations:
+    # 长资料读取 / 长输出解码时事件流可能安静很久，默认 30s 空闲超时会把连接掐断
+    haproxy.router.openshift.io/timeout: 1800s
+spec:
+  # 不写 host：由集群路由器自动分配 <route>-<namespace>.apps.<集群域名>，
+  # 这个名字落在路由默认证书的 *.apps.<集群域名> 通配范围里，浏览器不会报证书错误。
+  # 想用固定域名就取消下面这行并自行把该域名解析到路由器的 VIP / 负载均衡地址；
+  # 域名不在 *.apps.<集群域名> 之下时，还要给这个 Route 配 tls.certificate 和 tls.key。
+  # host: tokenspeed.example.com
+  to:
+    kind: Service
+    name: tokenspeed
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    # 路由器终结 TLS，反代到后端用明文 HTTP（应用本身只跑 HTTP）
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

@@ -1,0 +1,154 @@
+# TokenSpeed —— OKD / OpenShift 部署清单
+#
+# 生成顺序：ImageStream → BuildConfig（Docker 策略 + 二进制源）→ Deployment → Service → Route
+# 完整步骤见同目录 README.md。默认假定项目（namespace）名为 tokenspeed，
+# 用别的项目名时执行 README 里的 `oc set image` 一行修正镜像地址即可。
+#
+# 清单已按 restricted-v2 SCC 编写：不申请特权、丢弃全部 capability、
+# 只读根文件系统、随机 UID 运行（已在本地用 --user 1000670000:0 --read-only 实测通过）。
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: tokenspeed
+  labels:
+    app: tokenspeed
+spec:
+  lookupPolicy:
+    local: false
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: tokenspeed
+  labels:
+    app: tokenspeed
+spec:
+  # 二进制源：用 `oc start-build tokenspeed --from-dir=.` 把本地目录推上去构建
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: tokenspeed:latest
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tokenspeed
+  labels:
+    app: tokenspeed
+spec:
+  # 只能是 1 个副本：/api/stop 依赖进程内的 run 表，多副本时停止请求可能打到别的 Pod
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tokenspeed
+  template:
+    metadata:
+      labels:
+        app: tokenspeed
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: tokenspeed
+          # OKD 内置镜像仓库的集群内地址；项目名不是 tokenspeed 时见 README
+          image: image-registry.openshift-image-registry.svc:5000/tokenspeed/tokenspeed:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 5173
+              protocol: TCP
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "5173"
+            # 已经是公网可访问的服务，必须打开：拒绝把测速请求转发到内网/本机地址
+            - name: BLOCK_PRIVATE
+              value: "1"
+            # 云服务器公网 IP 通常不在网卡上，需要显式声明才会一并拒绝
+            # - name: SELF_IPS
+            #   value: "203.0.113.10"
+          readinessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: "1"
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tokenspeed
+  labels:
+    app: tokenspeed
+spec:
+  selector:
+    app: tokenspeed
+  ports:
+    - name: http
+      port: 5173
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tokenspeed
+  labels:
+    app: tokenspeed
+  annotations:
+    # 一次测速的 NDJSON 事件流可能持续很久（长资料读取、长输出解码），
+    # 默认 30s 的空闲超时会把连接掐掉，这里放宽到 30 分钟
+    haproxy.router.openshift.io/timeout: 1800s
+spec:
+  to:
+    kind: Service
+    name: tokenspeed
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

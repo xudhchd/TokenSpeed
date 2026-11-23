@@ -1,0 +1,115 @@
+# TokenSpeed 出站网络策略（OKD / OVN-Kubernetes）
+#
+# 用途：当 Deployment 里把 BLOCK_PRIVATE 关掉（值设为 "0" 或删掉该变量）以便测试
+# 集群内 / 内网模型时，用这组策略把"能连谁"从应用层挪到网络层，避免它变成内网跳板。
+#
+# 语义：NetworkPolicy 的 egress 规则是"并集"——
+#   tokenspeed-egress-deny-all 选中 Pod 后默认全拒，
+#   其余三条各自开一个口子（DNS / 内网模型 / 公网 API），最终生效的是它们的并集。
+# 因此只需要改后面三条里的目标，不要图省事放开整个 10.0.0.0/8。
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tokenspeed-egress-deny-all
+  namespace: ai
+spec:
+  podSelector:
+    matchLabels:
+      app: tokenspeed
+  policyTypes:
+    - Egress
+  # 不写 egress 规则 = 拒绝所有出站
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tokenspeed-egress-dns
+  namespace: ai
+spec:
+  podSelector:
+    matchLabels:
+      app: tokenspeed
+  policyTypes:
+    - Egress
+  egress:
+    # 全拒之后必须先放过 DNS，否则连域名都解析不了
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tokenspeed-egress-model
+  namespace: ai
+spec:
+  podSelector:
+    matchLabels:
+      app: tokenspeed
+  policyTypes:
+    - Egress
+  egress:
+    # 场景一：模型服务和 TokenSpeed 在同一个命名空间（按 Pod 标签放行）
+    - to:
+        - podSelector:
+            matchLabels:
+              app: vllm          # ← 改成你的模型 Pod 标签
+      ports:
+        - protocol: TCP
+          port: 8000             # ← 改成你的模型服务端口
+    # 场景二：模型服务在别的命名空间（namespaceSelector 与 podSelector 写在同一个
+    # to 条目里是"与"的关系；写成两个条目就是"或"）
+    # - to:
+    #     - namespaceSelector:
+    #         matchLabels:
+    #           kubernetes.io/metadata.name: model-serving
+    #       podSelector:
+    #         matchLabels:
+    #           app: vllm
+    #   ports:
+    #     - protocol: TCP
+    #       port: 8000
+    # 场景三：模型在集群外，但地址是内网 IP（按 IP 放行，比按网段安全）
+    # - to:
+    #     - ipBlock:
+    #         cidr: 192.168.10.20/32
+    #   ports:
+    #     - protocol: TCP
+    #       port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tokenspeed-egress-public
+  namespace: ai
+spec:
+  podSelector:
+    matchLabels:
+      app: tokenspeed
+  policyTypes:
+    - Egress
+  egress:
+    # 公网 API（DeepSeek / OpenAI / 通义 …）：允许公网，但用 except 排掉私有网段，
+    # 这样即使 BLOCK_PRIVATE=0，也打不到 10.x / 192.168.x / 云元数据 169.254.x。
+    # 不需要测公网 API 时整段删掉，只保留上面那条内网模型规则即可。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

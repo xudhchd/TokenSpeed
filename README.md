@@ -44,6 +44,9 @@ lib/client.js      OpenAI / Anthropic 流式请求封装
 lib/dataset.js     代码语料与 prompt 构造
 lib/mock.js        内置演示服务
 public/            前端（原生 HTML/CSS/JS）
+Dockerfile         运行镜像（Node 22 alpine，非 root，带健康检查）
+docker-compose.yml 单服务编排
+okd/               OKD / OpenShift 部署清单（ImageStream + BuildConfig + Deployment + Service + Route）
 ```
 
 后端发起请求并记录上游事件到达时间，浏览器负责展示。
@@ -52,9 +55,38 @@ public/            前端（原生 HTML/CSS/JS）
 
 运行 `npm test`，使用本地模拟流验证计时、吞吐计算和用量缺失等边界情况，无需 API Key。
 
+## Docker 部署
+
+项目零第三方依赖，镜像里不需要 `npm install`，构建只做文件拷贝（Node 22 alpine 基础镜像约 240 MB）。
+
+```bash
+docker build -t tokenspeed .
+docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed
+```
+
+或用 compose 一把起：
+
+```bash
+docker compose up -d --build
+```
+
+然后打开 http://127.0.0.1:5173 。容器内默认 `HOST=0.0.0.0`、`PORT=5173`，以非 root 的 `node` 用户运行，健康检查每 30 秒请求一次 `/api/info`。
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `PORT` | 监听端口，默认 5173 |
+| `HOST` | 监听地址，镜像内已设为 `0.0.0.0`，一般不用改 |
+| `BLOCK_PRIVATE=1` | 拒绝把测速请求转发到内网或本机地址（含解析到内网的域名）。公网部署务必打开 |
+| `SELF_IPS` | 逗号分隔的 IP，通常填云服务器的公网 IP（它不在网卡上，需要补进来才会被同样拒绝） |
+| `DEMO_PREFILL_TPS` / `DEMO_DECODE_TPS` / `DEMO_CHUNK` / `DEMO_MTP` / `DEMO_NO_CONT` | 内置演示服务的模拟参数，用法见 `lib/mock.js` |
+
+镜像默认把端口发布到 `127.0.0.1`，适合前面挂一层 nginx 之类的反向代理做访问控制和限流；如果确实要直接对外，把 compose 里的 `ports` 改成 `"5173:5173"`，并同时打开 `BLOCK_PRIVATE=1`、配置 `SELF_IPS` 与出站网络策略，避免这个服务被当成访问内网的跳板。服务端无状态，配置和 Key 都存在浏览器里，因此不需要挂载卷做持久化。
+
+在 OKD / OpenShift 上用 `okd/tokenspeed.yaml`（ImageStream + BuildConfig + Deployment + Service + Route，已按 restricted-v2 安全上下文写好），步骤见 [okd/README.md](okd/README.md)。
+
 ## 部署到公网
 
-默认仅监听 `127.0.0.1`。需要在隔离的容器内监听所有网卡时，可用 `HOST=0.0.0.0 PORT=8080 npm start`。由于服务会向用户指定的地址发起请求，对公网提供服务时需在反向代理配置访问控制和限流，并通过出站网络策略隔离宿主机和内网服务。
+默认仅监听 `127.0.0.1`。直接用 Node 跑时，需要在隔离的容器内监听所有网卡，可用 `HOST=0.0.0.0 PORT=8080 npm start`。由于服务会向用户指定的地址发起请求，对公网提供服务时需在反向代理配置访问控制和限流，并通过出站网络策略隔离宿主机和内网服务。
 
 ## 许可证
 

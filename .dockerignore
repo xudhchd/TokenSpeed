@@ -1,0 +1,10 @@
+.git
+.gitignore
+.workbuddy
+node_modules
+.DS_Store
+Dockerfile
+docker-compose.yml
+.dockerignore
+scripts
+README.md
