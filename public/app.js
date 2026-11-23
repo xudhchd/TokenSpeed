@@ -1551,5 +1551,23 @@
     if (e.key === 'Enter' && !$('#viewSetup').hidden && e.target.tagName === 'INPUT') start(false);
   });
 
+  // 服务端证书校验状态。NODE_TLS_REJECT_UNAUTHORIZED=0 是进程级的，会让所有 https 上游（含公网 API）
+  // 都不校验证书，这里只做提示；不做成开关是因为它无法按单次请求生效——见 README 的「证书校验」一节。
+  async function loadServerInfo() {
+    let info;
+    try {
+      info = await fetch('./api/info').then((r) => r.json());
+    } catch (_) {
+      return; // 纯静态托管（没有后端）时接口不存在，静默跳过
+    }
+    const t = info && info.tls;
+    if (!t || !t.insecure) return;
+    const covered = t.extraCa ? ' 同时配置的 <code>NODE_EXTRA_CA_CERTS</code> 已被它覆盖，形同未设。' : '';
+    $('#tlsWarnMsg').innerHTML =
+      `<b>测速服务已关闭证书校验</b>（<code>NODE_TLS_REJECT_UNAUTHORIZED=0</code>）：所有 https 上游都不再校验证书，包括填了 Key 的公网 API。成绩可用，链路安全性不受保护。若只是为了访问内网的自签证书服务，改用 <code>NODE_EXTRA_CA_CERTS</code> 更安全。${covered}`;
+    $('#tlsWarn').hidden = false;
+  }
+
   restore();
+  loadServerInfo();
 })();

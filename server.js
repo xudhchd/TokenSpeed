@@ -25,6 +25,11 @@ const useDemo = (cfg) => {
 
 // 公开部署时设置 BLOCK_PRIVATE=1：拒绝把请求转发到本机、内网等地址，避免被当成跳板访问服务器上的其他服务
 const BLOCK_PRIVATE = process.env.BLOCK_PRIVATE === '1';
+// 证书校验状态，仅用于在页面上提示，不改变任何行为。
+// NODE_TLS_REJECT_UNAUTHORIZED=0 会让进程内所有 https 请求都不校验证书（包括填了 Key 的公网 API），
+// 而 NODE_EXTRA_CA_CERTS 只是往信任库里追加一个 CA，公网 CA 照常校验——后者是内网自签证书的正解。
+const TLS_INSECURE = process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0';
+const EXTRA_CA = process.env.NODE_EXTRA_CA_CERTS || null;
 // 本机网卡地址 + SELF_IPS 里声明的公网 IP（云服务器的公网 IP 通常不在网卡上）
 const OWN_IPS = new Set(
   Object.values(os.networkInterfaces())
@@ -161,6 +166,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/info') {
       return sendJson(res, 200, {
         dataset: { items: D.ITEMS.length, chars: D.TOTAL_CHARS, sources: ['HumanEval (164)', 'MBPP (974)'] },
+        tls: { insecure: TLS_INSECURE, extraCa: EXTRA_CA },
+        blockPrivate: BLOCK_PRIVATE,
       });
     }
     if (req.method === 'GET' && url.pathname === '/direct-bench.js') {
