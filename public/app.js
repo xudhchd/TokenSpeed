@@ -813,6 +813,13 @@
         break;
       case 'ping_result': {
         S.ping = ev;
+        if (ev.unavailable) {
+          // 延迟测不出来但服务是通的：只把这一项标成不可用，后面照常继续跑
+          setTier(0, '不可用');
+          html($('#gSub'), `延迟不可用 · ${esc(ev.reason)}`);
+          setStep('ping', 'done', '—', '');
+          break;
+        }
         setGauge(ev.min);
         const [i, name] = pingRate(ev.min);
         setTier(i, name);
@@ -1257,8 +1264,15 @@
     if (S.direct) r('请求路径', '浏览器直连本机');
     if (cfg.thinkingMode !== 'default') r('思考模式', thinkingLabels[cfg.thinkingMode]);
     if (ping) {
-      r('延迟 最快 / 平均', `${fmt(ping.min, 0)} / ${fmt(ping.avg, 0)} 毫秒`);
-      r('延迟抖动', `${fmt(ping.jitter, 0)} 毫秒`);
+      if (ping.unavailable) {
+        r('延迟', '不可用', 'err');
+        r('延迟不可用的原因', esc(ping.reason), 'err');
+      } else {
+        r('延迟 最快 / 平均', `${fmt(ping.min, 0)} / ${fmt(ping.avg, 0)} 毫秒`);
+        r('延迟抖动', `${fmt(ping.jitter, 0)} 毫秒`);
+        if (ping.tokens > 1) r('延迟探针', `已自动放宽至 ${ping.tokens} tokens（首 token 无可见文本）`);
+        if (ping.approx) r('延迟口径', '未收到可见文本，取首个 SSE 数据块的到达时间');
+      }
     }
     if (p) {
       r('读取 完成路数', `${p.ok} / ${p.ok + p.failed}`);
@@ -1315,7 +1329,7 @@
   function resultText() {
     const { ping, prefill: p, single: s, decode: d, cfg } = S;
     const L = [`【TokenSpeed 大模型 API 测速】`, `模型：${cfg.model}（${host(cfg.baseUrl)}）`];
-    if (ping) L.push(`响应延迟：${fmt(ping.min, 0)} 毫秒`);
+    if (ping) L.push(ping.unavailable ? `响应延迟：不可用（${ping.reason}）` : `响应延迟：${fmt(ping.min, 0)} 毫秒${ping.approx ? '（首个数据块）' : ''}`);
     if (p) L.push(`首包前有效输入吞吐：${fmtRate(p.throughput)}`);
     if (s) L.push(`单发 2 秒峰值：${fmtRate(s.peak)}，解码平均 ${fmtRate(s.speed)}，端到端吞吐 ${fmtRate(s.e2eSpeed)}${s.byUser ? '（提前结束）' : ''}`);
     if (d) {
