@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "mock": "node scripts/mock-server.js",
+    "image": "node scripts/build-image.js",
     "test": "node --test scripts/benchmark.test.js"
   },
   "engines": {

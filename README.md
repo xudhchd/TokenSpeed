@@ -44,6 +44,7 @@ lib/client.js      OpenAI / Anthropic 流式请求封装
 lib/dataset.js     代码语料与 prompt 构造
 lib/mock.js        内置演示服务
 public/            前端（原生 HTML/CSS/JS）
+scripts/build-image.js  按 git tag 构建镜像（npm run image）
 Dockerfile         运行镜像（Node 22 alpine，非 root，带健康检查）
 docker-compose.yml 单服务编排
 okd/               OKD / OpenShift 部署清单（ImageStream + BuildConfig + Deployment + Service + Route）
@@ -60,7 +61,7 @@ okd/               OKD / OpenShift 部署清单（ImageStream + BuildConfig + De
 项目零第三方依赖，镜像里不需要 `npm install`，构建只做文件拷贝（Node 22 alpine 基础镜像约 240 MB）。
 
 ```bash
-docker build -t tokenspeed:1.1.0 -t tokenspeed:latest .
+npm run image    # 版本号取自 git tag，规则见「版本与发版」
 docker run -d --name tokenspeed -p 127.0.0.1:5173:5173 tokenspeed:1.1.0
 ```
 
@@ -103,21 +104,54 @@ docker compose up -d --build
 docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' tokenspeed:1.1.0
 ```
 
-发版要同步改四处，缺一处就会出现「tag 是 1.2.0、镜像还是 1.1.0」这类不一致：
+### 按 tag 构建镜像
 
-1. `package.json` 的 `version`
-2. `Dockerfile` 里 `ARG VERSION=...` 的默认值
-3. `docker-compose.yml` 里 `${TOKENSPEED_VERSION:-...}` 的默认值
-4. `okd/tokenspeed.yaml` 的 BuildConfig 输出标签与 Deployment 镜像地址、`okd/deployment.yaml` 的镜像地址
+版本号不手填，直接从 git tag 推导 —— 用 `scripts/build-image.js`（等价于 `npm run image`）：
 
-然后打 tag 并推送：
+```bash
+npm run image                      # 构建并打标签，版本取自 git describe
+npm run image -- --dry-run          # 只打印将执行的 docker 命令，不构建
+npm run image -- --no-latest        # 不打 latest 别名
+npm run image -- --platform linux/amd64   # 交叉构建（比如在 Mac 上出 x86 镜像）
+```
+
+推导规则，每一档都是合法的 Docker tag：
+
+| 仓库状态 | 镜像标签 | 是否打 `latest` |
+| --- | --- | --- |
+| HEAD 正好在 tag `v1.1.0` 上，且没有未提交改动 | `tokenspeed:1.1.0` | 是 |
+| tag 之后又有 3 个提交 | `tokenspeed:1.1.0-3-g6ac568a` | 否 |
+| 有未提交的改动（只算已跟踪文件） | `tokenspeed:1.1.0-dirty` | 否 |
+| 一个 tag 都没有 | `tokenspeed:0.0.0-<短提交号>` | 否 |
+
+`latest` 只给发布版打，否则它会指向某个中间状态，和上面「固定版本用于部署」的约定就冲突了。要强行打用 `--latest`。
+
+脚本还会核对 `package.json` 的 `version` 与 tag 推出的是否一致，不一致只提示、不中断 —— **镜像标签以 git tag 为准**。
+
+不想用脚本时，手动等价写法：
+
+```bash
+VER=$(git describe --tags --exact-match 2>/dev/null | sed 's/^v//')   # 只在 tag 上有效
+docker build -t tokenspeed:$VER -t tokenspeed:latest \
+  --build-arg VERSION=$VER --build-arg REVISION=$(git rev-parse --short HEAD) .
+```
+
+### 发版要改哪几处
+
+因为版本号现在由 tag 推导，发版只剩三件事：
+
+1. `package.json` 的 `version`（只为保持文件里写着的一致，`npm pkg set version=1.2.0` 即可）
+2. `okd/tokenspeed.yaml` 的 BuildConfig 输出标签与 Deployment 镜像地址、`okd/deployment.yaml` 的镜像地址 —— 集群里不跑构建脚本，这三处必须手改
+3. 打 tag 并推送
 
 ```bash
 git tag -a v1.2.0 -m "v1.2.0"
 git push origin v1.2.0
 ```
 
-`git describe --tags` 可以看当前提交相对哪个版本；镜像构建时想带上提交号，用 `--build-arg REVISION=$(git rev-parse --short HEAD)`（compose 对应 `TOKENSPEED_REVISION=$(git rev-parse --short HEAD) docker compose build`）。
+`Dockerfile` 的 `ARG VERSION` 和 `docker-compose.yml` 的 `${TOKENSPEED_VERSION:-...}` 默认值只是「不走脚本、直接 `docker build`」时的兜底，不必每次跟着改；脚本和 compose 都能用环境变量覆盖它们。
+
+`git describe --tags` 可看当前提交相对哪个版本。
 
 ## 证书校验（自签名证书报错）
 
