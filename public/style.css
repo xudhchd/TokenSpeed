@@ -273,6 +273,7 @@ input:focus { background: #fff; box-shadow: 3px 3px 0 var(--c1); }
 /* ---------------- 页脚 / 历史 / 提示 */
 .foot { text-align: center; color: var(--muted); font-size: 12px; margin-top: 40px; }
 .foot a { color: var(--ink); font-weight: 700; }
+.foot .ver { display: block; margin-top: 6px; font-weight: 800; letter-spacing: 0.04em; }
 .sheet { position: fixed; inset: 0; z-index: 50; pointer-events: none; }
 .sheet-mask { position: absolute; inset: 0; background: rgba(29, 26, 58, 0.35); opacity: 0; transition: opacity 0.2s; }
 .sheet-body { position: absolute; right: 0; top: 0; bottom: 0; width: min(420px, 100%); background: var(--bg); border-left: 2.5px solid var(--ink); transform: translateX(100%); transition: transform 0.28s cubic-bezier(0.3, 1.2, 0.5, 1); display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom, 0px); }

@@ -1597,6 +1597,9 @@
     } catch (_) {
       return; // 纯静态托管（没有后端）时接口不存在，静默跳过
     }
+    // 页脚版本号：确认浏览器加载的前端与后端镜像是同一版（缓存了旧 app.js 时这里不会变）
+    const ver = $('#verTag');
+    if (ver && info && info.version) ver.textContent = `TokenSpeed ${info.version}`;
     const t = info && info.tls;
     if (!t || !t.insecure) return;
     const covered = t.extraCa ? ' 同时配置的 <code>NODE_EXTRA_CA_CERTS</code> 已被它覆盖，形同未设。' : '';

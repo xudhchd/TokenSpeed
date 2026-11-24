@@ -12,6 +12,8 @@ const { listModels } = require('./lib/client');
 const { buildBrowserBundle } = require('./lib/browser-bundle');
 const D = require('./lib/dataset');
 const mock = require('./lib/mock');
+// 只读版本号：页脚会显示它，用来一眼确认浏览器加载的前端是不是这版镜像里的
+const PKG_VERSION = require('./package.json').version;
 // 前端选择「演示模式」时 baseUrl 传 "demo"，这里换成本机内置的演示服务
 const useDemo = (cfg) => {
   if (cfg && cfg.baseUrl === 'demo') {
@@ -165,6 +167,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/info') {
       return sendJson(res, 200, {
+        version: PKG_VERSION,
         dataset: { items: D.ITEMS.length, chars: D.TOTAL_CHARS, sources: ['HumanEval (164)', 'MBPP (974)'] },
         tls: { insecure: TLS_INSECURE, extraCa: EXTRA_CA },
         blockPrivate: BLOCK_PRIVATE,
