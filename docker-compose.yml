@@ -4,11 +4,11 @@ services:
       context: .
       args:
         # 与 package.json 的 version、git tag 保持一致；临时构建可用
-        # TOKENSPEED_VERSION=v1.2.0 docker compose build 覆盖
-        VERSION: ${TOKENSPEED_VERSION:-v1.2.0}
+        # TOKENSPEED_VERSION=v1.2.1 docker compose build 覆盖
+        VERSION: ${TOKENSPEED_VERSION:-v1.2.1}
         REVISION: ${TOKENSPEED_REVISION:-unknown}
     # 用具体版本号而不是 latest：回滚和排查时能一眼看出跑的是哪个版本
-    image: tokenspeed:${TOKENSPEED_VERSION:-v1.2.0}
+    image: tokenspeed:${TOKENSPEED_VERSION:-v1.2.1}
     container_name: tokenspeed
     restart: unless-stopped
     # 默认只绑本机回环，由反向代理对外提供服务；

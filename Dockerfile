@@ -30,7 +30,7 @@ CMD ["node", "server.js"]
 # 版本信息写进镜像元数据，docker inspect 可核对；也用来区分和上游原版的不同版本。
 # 放在最后：改版本号只会重建这一层（纯元数据），不会让前面 COPY 源码的层失效。
 # 正常不要手填，用 `npm run image`（scripts/build-image.js）从 git tag 自动取值
-ARG VERSION=v1.2.0
+ARG VERSION=v1.2.1
 ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="TokenSpeed" \
