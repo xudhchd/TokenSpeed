@@ -1,6 +1,6 @@
 {
   "name": "tokenspeed",
-  "version": "v1.1.2",
+  "version": "v1.2.0",
   "description": "LLM API benchmark for first output latency, input throughput, and single and concurrent output speed",
   "main": "server.js",
   "scripts": {
