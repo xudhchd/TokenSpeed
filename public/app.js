@@ -36,7 +36,12 @@
   };
   const fmtK = (v) => (v == null ? '—' : v >= 1000 ? +(v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'K' : String(Math.round(v)));
   const fmtTok = (v) => (v == null ? '—' : v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1000 ? +(v / 1000).toFixed(1) + 'K' : String(Math.round(v || 0)));
-  const fmtRate = (v) => (v == null ? '不可用' : `${fmt(v, 1)} tok/s`);
+  const fmtRate = (v, est) => (v == null ? '不可用' : `${est ? '≈' : ''}${fmt(v, 1)} tok/s`);
+  // 服务端不保证逐块返回用量（OpenAI 规范只有末尾一条）。精确字段缺失时退到同名的 Est 估算字段，
+  // 返回值带上"是否为估算"，界面统一加 ≈ 前缀——两种口径永远不混在一起。
+  const pk = (o, k) => (o?.[k] != null ? [o[k], false] : o?.[k + 'Est'] != null ? [o[k + 'Est'], true] : [null, false]);
+  const overlapOf = (d) => (d?.overlap ? [d.overlap, false] : d?.overlapEst ? [d.overlapEst, true] : [null, false]);
+  const laneRate = (l) => (l?.speed != null ? l.speed : l?.speedEst);
   const fmtWan = (v) => (v >= 10000 ? +(v / 10000).toFixed(1) + ' 万' : String(Math.round(v)));
   const fmtS = (ms) => (ms == null ? '—' : ms >= 1000 ? (ms / 1000).toFixed(2) + ' 秒' : Math.round(ms) + ' 毫秒');
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1024,7 +1029,7 @@
   }
 
   function laneSpeed(L, t) {
-    if (L.final) return L.final.speed || 0;
+    if (L.final) return laneRate(L.final) || 0;
     if (L.tFirst == null) return 0;
     const dt = (t - L.tFirst) / 1000;
     return dt > 0.4 ? Math.max(0, L.tok - L.firstCount) / dt : 0;
@@ -1054,7 +1059,8 @@
     L.final = ev;
     L.el.classList.remove('live');
     if (ev.ok) {
-      html(L.em, fmtRate(ev.speed));
+      const [sv, se] = pk(ev, 'speed');
+      html(L.em, fmtRate(sv, se));
       if (ev.tokens != null) L.bar.style.width = Math.min(100, (ev.tokens / V.max) * 100).toFixed(1) + '%';
     } else if (ev.stopped) {
       html(L.em, '已停止');
@@ -1070,15 +1076,17 @@
     const L = V.lanes[0];
     if (L) finalizeLane(L, ev);
     V.final = true;
-    V.rate = ev.peak;
-    setGauge(ev.peak);
-    if (ev.peak != null) setTier(...tierOf('single', ev.peak));
+    const [pv, pe] = pk(ev, 'peak');
+    V.rate = pv;
+    setGauge(pv);
+    if (pv != null) setTier(...tierOf('single', pv));
     else setTier(0, '不可用');
     punch($('#gNum'), 1.2);
     SFX.stamp();
     $('#gK').textContent = '单发峰值速度 · 最快 2 秒';
-    html($('#gSub'), `解码平均 ${fmtRate(ev.speed)}${ev.byUser ? '（提前结束）' : ''}`);
-    setStep('single', 'done', fmt(ev.peak, 1), 'tok/s');
+    const [sv, se] = pk(ev, 'speed');
+    html($('#gSub'), `解码平均 ${fmtRate(sv, se)}${ev.byUser ? '（提前结束）' : ''}`);
+    setStep('single', 'done', (pe ? '≈' : '') + fmt(pv, 1), 'tok/s');
     $('#btnEndDecode').hidden = true;
   }
 
@@ -1092,19 +1100,22 @@
   function onDecodeResult(ev) {
     S.decode = ev;
     V.final = true;
-    V.rate = ev.overlap?.throughput ?? null;
-    V.avg = ev.avgSpeed;
+    const [ov, oe] = overlapOf(ev);
+    V.rate = ov?.throughput ?? null;
+    V.avg = pk(ev, 'avgSpeed')[0];
     setGauge(V.rate);
-    if (ev.overlap) setTier(...tierOf('decode', V.rate / ev.n));
+    if (ov) setTier(...tierOf('decode', V.rate / ev.n));
     else setTier(0, '不可用');
     punch($('#gNum'), 1.2);
     confetti(26, 1);
     SFX.boom();
     $('#btnEndDecode').hidden = true;
     $('#gK').textContent = `${ev.n} 路同时解码`;
-    html($('#gSub'), ev.overlap ? `共同解码窗口 ${fmtS(ev.overlap.windowMs)}` : '需要共同解码窗口和逐块累计用量');
-    setStep('decode', 'done', fmt(V.rate, 1), 'tok/s');
-    const best = ev.lanes.filter((l) => l.ok && l.speed).sort((a, b) => b.speed - a.speed)[0];
+    html($('#gSub'), ov
+      ? `共同解码窗口 ${fmtS(ov.windowMs)}${oe ? ' · 文本估算' : ''}`
+      : '需要共同解码窗口和逐块累计用量');
+    setStep('decode', 'done', (oe ? '≈' : '') + fmt(V.rate, 1), 'tok/s');
+    const best = ev.lanes.filter((l) => l.ok && laneRate(l) != null).sort((a, b) => laneRate(b) - laneRate(a))[0];
     if (best && V.lanes[best.i]) {
       const W = V.lanes[best.i].el;
       W.classList.add('win');
@@ -1115,7 +1126,7 @@
     b.hidden = false;
     b.innerHTML = `<span class="flag"></span><span>${
       ev.byUser ? '已提前结束，并发吞吐成绩不可用。' : `${ev.ok} / ${ev.n} 路完成，整轮用时 ${fmtS(ev.windowMs)}。`
-    }${best ? ` 最快的是 <b>#${best.i + 1} ${esc(best.domain)}</b>，${fmt(best.speed, 1)} tok/s。` : ''}</span>`;
+    }${best ? ` 最快的是 <b>#${best.i + 1} ${esc(best.domain)}</b>，${best.speed == null ? '≈' : ''}${fmt(laneRate(best), 1)} tok/s。` : ''}</span>`;
     anim(b, [{ transform: 'translateY(-14px) scale(.95)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 380, easing: 'cubic-bezier(.3,1.5,.5,1)' });
   }
 
@@ -1189,7 +1200,8 @@
     } else if (V.stage === 'single') {
       const L = V.lanes[0], R = S.single;
       const ttft = R ? R.ttft : L && L.tFirst != null ? L.tFirst - V.t0 : null;
-      html(el, kv('首包时间', ttft != null ? (R ? '' : '≈') + (ttft / 1000).toFixed(2) : '—', 's') + kv(R ? '解码平均' : '实时峰值估算', R ? fmt(R.speed, 1) : V.peak ? fmt(V.peak, 1) : '—', 'tok/s') + kv('已生成', R ? fmt(R.tokens, 0) : '≈' + fmtTok(V.total || 0), 'tokens') + kv('用时', ((R ? R.wallMs : t - V.t0) / 1000).toFixed(1), 's'));
+      const [rv, re] = pk(R, 'speed');
+      html(el, kv('首包时间', ttft != null ? (R ? '' : '≈') + (ttft / 1000).toFixed(2) : '—', 's') + kv(R ? '解码平均' : '实时峰值估算', R ? `${re ? '≈' : ''}${fmt(rv, 1)}` : V.peak ? fmt(V.peak, 1) : '—', 'tok/s') + kv('已生成', R ? fmt(R.tokens, 0) : '≈' + fmtTok(V.total || 0), 'tokens') + kv('用时', ((R ? R.wallMs : t - V.t0) / 1000).toFixed(1), 's'));
     } else if (V.stage === 'decode') {
       const R = S.decode;
       html(
@@ -1212,8 +1224,10 @@
 
   function mainRating() {
     const { single: s, decode: d, prefill: p, ping } = S;
-    if (s?.peak != null) return tierOf('single', s.peak);
-    if (d?.overlap) return tierOf('decode', d.overlap.throughput / d.n);
+    const [pv] = pk(s, 'peak');
+    if (pv != null) return tierOf('single', pv);
+    const [ov] = overlapOf(d);
+    if (ov) return tierOf('decode', ov.throughput / d.n);
     if (p?.throughput != null) return tierOf('prefill', p.throughput);
     return ping ? pingRate(ping.min) : [0, '—'];
   }
@@ -1227,8 +1241,14 @@
     const tiles = [];
     if (ping) tiles.push(['响应延迟', fmt(ping.min, 0), 'ms', 'z1', '']);
     if (p) tiles.push(['读取速度', fmt(p.throughput, 1), p.throughput == null ? '整轮输入用量不完整' : 'tok/s · 首包前有效输入吞吐', 'z2', '']);
-    if (s) tiles.push(['单发峰值', fmt(s.peak, 1), s.peak == null ? '需逐块用量与完整 2 秒窗口' : 'tok/s · 固定 2 秒窗口', 'z3', 'light']);
-    if (d) tiles.push([`${d.n} 路同时解码`, fmt(d.overlap?.throughput, 1), d.overlap ? `tok/s · 共同窗口 ${fmtS(d.overlap.windowMs)}` : '需要共同窗口和逐块用量', 'c1', 'light']);
+    if (s) {
+      const [pv, pe] = pk(s, 'peak');
+      tiles.push(['单发峰值', (pe ? '≈' : '') + fmt(pv, 1), pv == null ? '需逐块用量与完整 2 秒窗口' : pe ? 'tok/s · 文本估算' : 'tok/s · 固定 2 秒窗口', 'z3', 'light']);
+    }
+    if (d) {
+      const [ov, oe] = overlapOf(d);
+      tiles.push([`${d.n} 路同时解码`, (oe ? '≈' : '') + fmt(ov?.throughput, 1), ov ? `tok/s · 共同窗口 ${fmtS(ov.windowMs)}${oe ? '（估算）' : ''}` : '需要共同窗口和逐块用量', 'c1', 'light']);
+    }
     const [ri, rname] = mainRating();
     const best = bestOf(cfg);
     let sub = '';
@@ -1241,19 +1261,20 @@
 
     const parts = [];
     if (s?.byUser || d?.byUser) parts.push('生成阶段提前结束');
-    if (d?.overlap) parts.push(`${d.n} 路共同解码期间共输出 <b>${fmt(d.overlap.tokens, 0)}</b> tokens`);
+    const [vOv, vOe] = overlapOf(d);
+    if (vOv) parts.push(`${d.n} 路共同解码期间共输出 <b>${vOe ? '≈' : ''}${fmt(vOv.tokens, 0)}</b> tokens`);
     if (p) parts.push(`读取测试平均首包 <b>${fmtS(p.ttft.avg)}</b>`);
     if (d && d.cacheHitRate != null) parts.push(`前缀缓存命中 ${(d.cacheHitRate * 100).toFixed(0)}%`);
     if (S.error && S.error !== '已停止') parts.push(`<span class="err">测试未全部完成：${esc(S.error)}</span>`);
     else if (S.error) parts.push('测试已手动停止');
     $('#verdict').innerHTML = parts.join('；') + (parts.length ? '。' : '');
 
-    const bars = d ? d.lanes.filter((l) => l.ok && l.speed) : [];
+    const bars = d ? d.lanes.filter((l) => l.ok && laneRate(l) != null) : [];
     $('#rBarsCard').hidden = bars.length < 2;
     if (bars.length >= 2) {
-      const mx = Math.max(...bars.map((l) => l.speed));
+      const mx = Math.max(...bars.map(laneRate));
       $('#rBars').innerHTML = bars
-        .map((l) => `<div class="rb${l.speed === mx ? ' win' : ''}" style="--lc:${laneVar(l.i)}"><span>${esc(l.domain)}</span><i><b data-w="${((l.speed / mx) * 100).toFixed(1)}"></b></i><em>${fmt(l.speed, 1)}</em></div>`)
+        .map((l) => `<div class="rb${laneRate(l) === mx ? ' win' : ''}" style="--lc:${laneVar(l.i)}"><span>${esc(l.domain)}</span><i><b data-w="${((laneRate(l) / mx) * 100).toFixed(1)}"></b></i><em>${l.speed == null ? '≈' : ''}${fmt(laneRate(l), 1)}</em></div>`)
         .join('');
     }
 
@@ -1284,17 +1305,22 @@
       if (p.failed) r('读取失败', `${p.failed} 路`, 'err');
     }
     if (s) {
-      r('单发 峰值（固定 2 秒）', fmtRate(s.peak));
-      r('单发 解码平均', fmtRate(s.speed));
+      const [pv, pe] = pk(s, 'peak');
+      const [sv, se] = pk(s, 'speed');
+      r('单发 峰值（固定 2 秒）', `${fmtRate(pv, pe)}${pe ? '（按字符估算）' : ''}`);
+      r('单发 解码平均', `${fmtRate(sv, se)}${se ? '（按字符估算）' : ''}`);
       r('单发 端到端输出吞吐', fmtRate(s.e2eSpeed));
       r('单发 首包 / 输出用量', `${fmtS(s.ttft)} / ${fmt(s.tokens, 0)} tokens`);
       if (s.chunkGap) r('单发 输出块间隔 P50 / P99', `${fmt(s.chunkGap.p50, 1)} / ${fmt(s.chunkGap.p99, 1)} 毫秒`);
     }
     if (d) {
-      r(`${d.n} 路同时解码吞吐`, fmtRate(d.overlap?.throughput));
-      if (d.overlap) r('共同解码窗口 / 输出量', `${fmtS(d.overlap.windowMs)} / ${fmt(d.overlap.tokens, 0)} tokens`);
+      const [ov, oe] = overlapOf(d);
+      r(`${d.n} 路同时解码吞吐`, `${fmtRate(ov?.throughput, oe)}${oe ? '（按字符估算）' : ''}`);
+      if (ov) r('共同解码窗口 / 输出量', `${fmtS(ov.windowMs)} / ${fmt(ov.tokens, 0)} tokens${oe ? '（估算）' : ''}`);
       r('并发 端到端输出吞吐', fmtRate(d.throughput));
-      r('各路解码速率平均（最慢~最快）', d.avgSpeed == null ? '不可用' : `${fmtRate(d.avgSpeed)}（${fmt(d.minSpeed, 1)}–${fmt(d.maxSpeed, 1)}）`);
+      const [av, ae] = pk(d, 'avgSpeed');
+      r('各路解码速率平均（最慢~最快）', av == null ? '不可用'
+        : `${fmtRate(av, ae)}（${fmt(ae ? d.minSpeedEst : d.minSpeed, 1)}–${fmt(ae ? d.maxSpeedEst : d.maxSpeed, 1)}）${ae ? '（按字符估算）' : ''}`);
       r('并发 平均首包', fmtS(d.ttft && d.ttft.avg));
       r('缓存命中率', d.cacheHitRate != null ? `${(d.cacheHitRate * 100).toFixed(1)}%` : '服务未返回');
       if (d.chunkGap) r('并发 输出块间隔 P50 / P99', `${fmt(d.chunkGap.p50, 1)} / ${fmt(d.chunkGap.p99, 1)} 毫秒`);
@@ -1331,9 +1357,14 @@
     const L = [`【TokenSpeed 大模型 API 测速】`, `模型：${cfg.model}（${host(cfg.baseUrl)}）`];
     if (ping) L.push(ping.unavailable ? `响应延迟：不可用（${ping.reason}）` : `响应延迟：${fmt(ping.min, 0)} 毫秒${ping.approx ? '（首个数据块）' : ''}`);
     if (p) L.push(`首包前有效输入吞吐：${fmtRate(p.throughput)}`);
-    if (s) L.push(`单发 2 秒峰值：${fmtRate(s.peak)}，解码平均 ${fmtRate(s.speed)}，端到端吞吐 ${fmtRate(s.e2eSpeed)}${s.byUser ? '（提前结束）' : ''}`);
+    if (s) {
+      const [pv, pe] = pk(s, 'peak');
+      const [sv, se] = pk(s, 'speed');
+      L.push(`单发 2 秒峰值：${fmtRate(pv, pe)}${pe ? '（估算）' : ''}，解码平均 ${fmtRate(sv, se)}${se ? '（估算）' : ''}，端到端吞吐 ${fmtRate(s.e2eSpeed)}${s.byUser ? '（提前结束）' : ''}`);
+    }
     if (d) {
-      L.push(`${d.n} 路同时解码：${fmtRate(d.overlap?.throughput)}${d.overlap ? `（共同窗口 ${fmtS(d.overlap.windowMs)}）` : ''}`);
+      const [ov, oe] = overlapOf(d);
+      L.push(`${d.n} 路同时解码：${fmtRate(ov?.throughput, oe)}${ov ? `（共同窗口 ${fmtS(ov.windowMs)}${oe ? '，估算' : ''}）` : ''}`);
       L.push(`整轮端到端输出吞吐：${fmtRate(d.throughput)}${d.byUser ? '（提前结束）' : ''}`);
     }
     return L.join('\n');
@@ -1366,9 +1397,15 @@
     const items = [];
     if (ping) items.push(['响应延迟', fmt(ping.min, 0), 'ms', COL.z1, COL.ink]);
     if (p) items.push(['有效输入吞吐', fmt(p.throughput, 1), p.throughput == null ? '不可用' : 'tok/s', COL.z2, COL.ink]);
-    if (s) items.push([s.byUser ? '单发峰值（提前结束）' : '单发 2 秒峰值', fmt(s.peak, 1), s.peak == null ? '不可用' : 'tok/s', COL.z3, '#fff']);
-    if (d) items.push([`${d.n} 路同时解码`, fmt(d.overlap?.throughput, 1), d.overlap ? 'tok/s' : '不可用', COL.c1, '#fff']);
-    const bars = d ? d.lanes.filter((l) => l.ok && l.speed) : [];
+    if (s) {
+      const [pv, pe] = pk(s, 'peak');
+      items.push([s.byUser ? '单发峰值（提前结束）' : '单发 2 秒峰值', (pe ? '≈' : '') + fmt(pv, 1), pv == null ? '不可用' : pe ? 'tok/s 估算' : 'tok/s', COL.z3, '#fff']);
+    }
+    if (d) {
+      const [ov, oe] = overlapOf(d);
+      items.push([`${d.n} 路同时解码`, (oe ? '≈' : '') + fmt(ov?.throughput, 1), ov ? (oe ? 'tok/s 估算' : 'tok/s') : '不可用', COL.c1, '#fff']);
+    }
+    const bars = d ? d.lanes.filter((l) => l.ok && laneRate(l) != null) : [];
     const tw = (1080 - 160 - 30) / 2, th = 200, rowH = 50;
     // 先排版再定画布高度，行数多时整张图变长，元素不挤在一起
     const y0 = 400 + Math.ceil(items.length / 2) * (th + 34) + 20;
@@ -1450,7 +1487,7 @@
       c.fillStyle = COL.ink;
       c.font = font(800, 30);
       c.fillText('各领域单路速度（tok/s）', 80, y0 + 20);
-      const mx = Math.max(...bars.map((l) => l.speed));
+      const mx = Math.max(...bars.map(laneRate));
       bars.forEach((l, i) => {
         const y = y0 + 50 + i * rowH;
         c.font = font(700, 24);
@@ -1460,7 +1497,7 @@
         rr(c, bx, y + 6, bw, 26, 8);
         c.fillStyle = COL.tint;
         c.fill();
-        rr(c, bx, y + 6, Math.max(14, (bw * l.speed) / mx), 26, 8);
+        rr(c, bx, y + 6, Math.max(14, (bw * laneRate(l)) / mx), 26, 8);
         c.fillStyle = laneCol(l.i);
         c.fill();
         c.lineWidth = 3;
@@ -1469,7 +1506,7 @@
         c.font = font(900, 26);
         c.fillStyle = COL.ink;
         c.textAlign = 'right';
-        c.fillText(fmt(l.speed, 1), W - 80, y + 28);
+        c.fillText(`${l.speed == null ? '≈' : ''}${fmt(laneRate(l), 1)}`, W - 80, y + 28);
         c.textAlign = 'left';
       });
     }

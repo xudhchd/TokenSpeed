@@ -153,6 +153,59 @@ test('missing and final-only usage produce different available metrics', async (
   });
 });
 
+test('final-only usage falls back to a character-estimated curve, never to the exact fields', async () => {
+  // 官方 OpenAI / DeepSeek 的流只在最后一块带 usage，中间块 usage 为 null
+  await withUpstream(async (req, send) => {
+    const prompt = req.messages[0].content.length;
+    if (req.max_tokens <= 1) {
+      openAIChunk(send);
+      openAIFinish(send, { completion_tokens: 1, prompt_tokens: prompt });
+      return;
+    }
+    for (let k = 0; k < 6; k++) {
+      if (k) await sleep(500);
+      send({ choices: [{ delta: { content: '中文输出内容示例abc' } }], usage: null });
+    }
+    openAIFinish(send, { completion_tokens: 120, prompt_tokens: prompt });
+  }, async (baseUrl) => {
+    const s = await run(baseUrl);
+    // 精确口径保持不可用，估算口径单独给出
+    assert.equal(s.single.speed, null);
+    assert.equal(s.single.peak, null);
+    assert.ok(s.single.speedEst > 0);
+    assert.ok(s.single.peakEst > 0);
+    // 6 块 × 500ms 覆盖了完整 2 秒窗口
+    assert.ok(s.single.speedEst < s.single.peakEst);
+    assert.equal(s.decode.overlap, null);
+    assert.equal(s.decode.avgSpeed, null);
+    assert.ok(s.decode.overlapEst.throughput > 0);
+    assert.ok(s.decode.avgSpeedEst > 0);
+    assert.ok(s.decode.minSpeedEst <= s.decode.maxSpeedEst);
+    // 估算曲线的终点必须严格等于上游报告的总用量
+    assert.equal(s.decode.totalTokens, 240);
+  });
+});
+
+test('an estimated curve is dropped when the total usage is missing', async () => {
+  await withUpstream(async (req, send) => {
+    if (req.max_tokens <= 1) {
+      openAIChunk(send);
+      openAIFinish(send, { completion_tokens: 1, prompt_tokens: 100 });
+      return;
+    }
+    openAIChunk(send);
+    await sleep(30);
+    openAIChunk(send);
+    openAIFinish(send); // 连末尾汇总都没有
+  }, async (baseUrl) => {
+    const s = await run(baseUrl);
+    assert.equal(s.single.speed, null);
+    assert.equal(s.single.speedEst, null);
+    assert.equal(s.decode.avgSpeedEst, null);
+  });
+});
+
+
 test('empty and truncated streams degrade to a first-chunk latency instead of aborting', async () => {
   // 流完整但没有任何可见文本：放宽到 16 token 也拿不到，退化成"首个 SSE 数据块到达"
   await withUpstream((_, send) => openAIFinish(send, { prompt_tokens: 20, completion_tokens: 1 }), async (baseUrl) => {
